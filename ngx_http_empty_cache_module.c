@@ -12,19 +12,27 @@
 #include <ftw.h>
 #include <unistd.h>
 
-////////////////
-ngx_int_t do_the_shit( ngx_http_request_t *r );
-/////////////////
-char *ngx_http_empty_cache_conf(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
-static void * ngx_http_empty_cache_loc_conf( ngx_conf_t *cf );
-static ngx_int_t ngx_http_empty_cache_handler(ngx_http_request_t *r);
-int rmrf(char *path);
-int unlink_cb(const char *fpath, const struct stat *sb, int typeflag, struct FTW *ftwbuf);
 
-// static ngx_conf_post_handler_pt ngx_http_empty_cache_p = ngx_http_empty_cache;
+ngx_int_t ngx_http_empty_cache_respond( ngx_http_request_t *r );
+char     *ngx_http_empty_cache_conf( ngx_conf_t *cf, ngx_command_t *cmd, void *conf );
+ngx_int_t ngx_http_empty_cache_handler( ngx_http_request_t *r);
+ngx_int_t ngx_http_empty_cache_remove_folder( char *path );
+
+static char ngx_http_cache_purge_success_page_top[] =
+    "<html>" CRLF
+    "<head><title>Cache emptied</title></head>" CRLF
+    "<body bgcolor=\"white\">" CRLF
+    "<center><h1>Cache emptied</h1>" CRLF
+;
+
+static char ngx_http_cache_purge_success_page_tail[] =
+    CRLF "</center>" CRLF
+    "<hr><center>" NGINX_VER "with ngx_empty_cache module</center>" CRLF
+    "</body>" CRLF
+    "</html>" CRLF
+;
 
 extern ngx_module_t ngx_http_fastcgi_module;
-
 /**
  * Redefinition of ngx_http_fastcgi_loc_conf_t
  * @see ngx_http_fastcgi_module
@@ -43,30 +51,22 @@ typedef struct {
     ngx_array_t                   *fastcgi_lengths;
     ngx_array_t                   *fastcgi_values;
 
-#  if defined(nginx_version) && (nginx_version >= 8040)
-    ngx_hash_t                     headers_hash;
-    ngx_uint_t                     header_params;
-#  endif /* nginx_version >= 8040 */
+    #  if defined(nginx_version) && (nginx_version >= 8040)
+        ngx_hash_t                     headers_hash;
+        ngx_uint_t                     header_params;
+    #  endif /* nginx_version >= 8040 */
 
-#  if defined(nginx_version) && (nginx_version >= 1001004)
-    ngx_flag_t                     keep_conn;
-#  endif /* nginx_version >= 1001004 */
+    #  if defined(nginx_version) && (nginx_version >= 1001004)
+        ngx_flag_t                     keep_conn;
+    #  endif /* nginx_version >= 1001004 */
 
-    ngx_http_complex_value_t       cache_key;
+        ngx_http_complex_value_t       cache_key;
 
-#  if (NGX_PCRE)
-    ngx_regex_t                   *split_regex;
-    ngx_str_t                      split_name;
-#  endif /* NGX_PCRE */
+    #  if (NGX_PCRE)
+        ngx_regex_t                   *split_regex;
+        ngx_str_t                      split_name;
+    #  endif /* NGX_PCRE */
 } ngx_http_fastcgi_loc_conf_t;
-
-/**
- * module settings
- */
-typedef struct {
-    ngx_str_t      keyzone;
-} ngx_http_empty_cache_loc_conf_t;
-
 
 static ngx_command_t  ngx_http_empty_cache_commands[] = {
 
@@ -90,7 +90,7 @@ static ngx_http_module_t  ngx_http_empty_cache_module_ctx = {
     NULL,                                  /* create server configuration */
     NULL,                                  /* merge server configuration */
 
-    ngx_http_empty_cache_loc_conf,         /* create location configuration */
+    NULL,         /* create location configuration */
     NULL                                   /* merge location configuration */
 };
 
@@ -109,20 +109,7 @@ ngx_module_t  ngx_http_empty_cache_module = {
     NGX_MODULE_V1_PADDING
 };
 
-static void * ngx_http_empty_cache_loc_conf( ngx_conf_t *cf ) {
-    ngx_http_empty_cache_loc_conf_t  *conf;
-
-    conf = ngx_palloc(cf->pool, sizeof(ngx_http_empty_cache_loc_conf_t));
-    if (conf == NULL) {
-        puts("could not allocate memory for the conf!");
-    }
-
-    return conf;
-}
-
 char *ngx_http_empty_cache_conf(ngx_conf_t *cf, ngx_command_t *cmd, void *conf) {
-    puts("empty cache_conf");
-
     // nginx core local configuration
     ngx_http_core_loc_conf_t         *clcf;
 
@@ -151,8 +138,6 @@ char *ngx_http_empty_cache_conf(ngx_conf_t *cf, ngx_command_t *cmd, void *conf) 
 
     value = cf->args->elts;
 
-    printf("%s keyzone is: %s\n", value->data, (value+1)->data);
-
     /* set fastcgi_cache part */
     flcf->upstream.cache = ngx_shared_memory_add(cf, &value[1], 0, &ngx_http_fastcgi_module);
     
@@ -175,7 +160,6 @@ char *ngx_http_empty_cache_conf(ngx_conf_t *cf, ngx_command_t *cmd, void *conf) 
     clcf = ngx_http_conf_get_module_loc_conf(cf, ngx_http_core_module);
 
     clcf->handler = ngx_http_empty_cache_handler;
-    puts("empty cache_conf end");
 
     return NGX_CONF_OK;
 }
@@ -232,14 +216,11 @@ ngx_int_t ngx_http_empty_cache_respond( ngx_http_request_t *r ) {
     ngx_buf_t   *b;
     ngx_chain_t  out;
     ngx_str_t    cache_path;
-    char       cpath[100];
+    size_t        len;
+    char         *cpath;
 
-    cache_path = r->cache->file_cache->path->name;
-    sprintf( cpath, "%s", cache_path.data );
-
-    rmrf ( cpath );
-
-   if (!(r->method & (NGX_HTTP_GET|NGX_HTTP_HEAD))) {
+    // only allow GET and HEAD requests
+    if (!(r->method & (NGX_HTTP_GET|NGX_HTTP_HEAD))) {
         return NGX_HTTP_NOT_ALLOWED;
     }
 
@@ -250,22 +231,39 @@ ngx_int_t ngx_http_empty_cache_respond( ngx_http_request_t *r ) {
         return rc;
     }
 
+    cache_path = r->cache->file_cache->path->name;
+
+    // create the cache path
+    cpath = ngx_pcalloc( r->pool, r->cache->file_cache->path->name.len );
+    sprintf( cpath, "%s", r->cache->file_cache->path->name.data );
+
+    // clear the cache
+    rc = ngx_http_empty_cache_remove_folder ( cpath );
+
+    if( rc != NGX_OK ) {
+        return rc;
+    }
+
+    len = sizeof(ngx_http_cache_purge_success_page_top) - 1
+          + sizeof(ngx_http_cache_purge_success_page_tail) - 1
+          + sizeof(CRLF "<br>Path: ") - 1
+          + cache_path.len;
 
     // set the 'Content-type' header
-    r->headers_out.content_type_len = sizeof("text/html") - 1;
-    r->headers_out.content_type.len = sizeof("text/html") - 1;
+    r->headers_out.content_type.len  = sizeof("text/html") - 1;
     r->headers_out.content_type.data = (u_char *) "text/html";
+    r->headers_out.status            = NGX_HTTP_OK;
+    r->headers_out.content_length_n  = len;
 
     // send the header only, if the request type is http 'HEAD'
     if (r->method == NGX_HTTP_HEAD) {
-        r->headers_out.status = NGX_HTTP_OK;
-        r->headers_out.content_length_n = cache_path.len;
- 
-        return ngx_http_send_header(r);
+        return ngx_http_send_header(r);        
     }
 
-    // allocate a buffer for your response body
-    b = ngx_pcalloc(r->pool, sizeof(ngx_buf_t));
+
+    // create a temporary buffer for the output body
+    b = ngx_create_temp_buf(r->pool, len);
+
     if (b == NULL) {
         return NGX_HTTP_INTERNAL_SERVER_ERROR;
     }
@@ -274,16 +272,15 @@ ngx_int_t ngx_http_empty_cache_respond( ngx_http_request_t *r ) {
     out.buf = b;
     out.next = NULL;
 
-    // adjust the pointers of the buffer
-    b->pos = cache_path.data;
-    b->last = cache_path.data + cache_path.len;
-    b->memory = 1;    /* this buffer is in memory */
-    b->last_buf = 1;  /* this is the last buffer in the buffer chain */
-
-    /* set the status line */
-    r->headers_out.status = NGX_HTTP_OK;
-    r->headers_out.content_length_n = cache_path.len;
-
+    b->last = ngx_cpymem(b->last, ngx_http_cache_purge_success_page_top,
+                         sizeof(ngx_http_cache_purge_success_page_top) - 1);
+    b->last = ngx_cpymem(b->last, CRLF "<br>Path: ",
+                         sizeof(CRLF "<br>Path: ") - 1);
+    b->last = ngx_cpymem(b->last, cache_path.data,
+                         cache_path.len);
+    b->last = ngx_cpymem(b->last, ngx_http_cache_purge_success_page_tail,
+                         sizeof(ngx_http_cache_purge_success_page_tail) - 1);
+    b->last_buf = 1;
 
     /* send the headers of your response */
     rc = ngx_http_send_header(r);
@@ -296,16 +293,55 @@ ngx_int_t ngx_http_empty_cache_respond( ngx_http_request_t *r ) {
     return ngx_http_output_filter(r, &out);
 }
 
+ngx_int_t ngx_http_empty_cache_remove_folder( char* path ) {
+    DIR   *dp;
+    struct dirent *ep;
+    char   filepath[100];
+    struct stat buf;
+    int    rv, empty = 1;
 
-int unlink_cb(const char *fpath, const struct stat *sb, int typeflag, struct FTW *ftwbuf) {
-    int rv = remove(fpath);
 
-    if (rv)
-        return NGX_ERROR;
+    dp = opendir ( path );
 
-    return rv;
-}
+    if (dp != NULL) {
+        // go through the folder
+        while ( (ep = readdir( dp )) ) {
+            // skip the . and ..
+            if( strcmp( ep->d_name, ".") && strcmp (ep->d_name, "..") ) {            
+               empty = 0;
 
-int rmrf(char *path) {
-    return nftw(path, unlink_cb, 64, FTW_DEPTH | FTW_PHYS);
+                // compose path
+                strcpy( filepath, path );
+                if ( filepath[ strlen( filepath ) - 1 ])
+                    strcat ( filepath, "/");
+
+                strcat( filepath, ep->d_name );
+
+                if( stat( filepath, &buf) == 0 && S_ISDIR( buf.st_mode ) ) {
+                    rv = ngx_http_empty_cache_remove_folder( filepath );
+                    if (  rv == NGX_HTTP_INTERNAL_SERVER_ERROR) {
+                        return NGX_HTTP_INTERNAL_SERVER_ERROR;
+                    }
+                    rv = rmdir( filepath );
+                    if( rv )
+                        return NGX_HTTP_INTERNAL_SERVER_ERROR;
+                } else {
+                    rv = unlink( filepath );
+    
+                    if( rv )
+                        return NGX_HTTP_INTERNAL_SERVER_ERROR;
+                }
+            }
+        }
+
+
+        // if the folder was empty, return 404
+        if( empty )
+            return NGX_HTTP_NOT_FOUND;
+    } else {
+        // if the folder doesn't exist, return 404
+        return NGX_HTTP_NOT_FOUND;
+    }
+
+    return NGX_OK;
 }
