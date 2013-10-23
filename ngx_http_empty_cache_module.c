@@ -8,6 +8,9 @@
 #include <ngx_config.h>
 #include <ngx_core.h>
 #include <ngx_http.h>
+#include <stdio.h>
+#include <ftw.h>
+#include <unistd.h>
 
 ////////////////
 ngx_int_t do_the_shit( ngx_http_request_t *r );
@@ -15,6 +18,8 @@ ngx_int_t do_the_shit( ngx_http_request_t *r );
 char *ngx_http_empty_cache_conf(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
 static void * ngx_http_empty_cache_loc_conf( ngx_conf_t *cf );
 static ngx_int_t ngx_http_empty_cache_handler(ngx_http_request_t *r);
+int rmrf(char *path);
+int unlink_cb(const char *fpath, const struct stat *sb, int typeflag, struct FTW *ftwbuf);
 
 // static ngx_conf_post_handler_pt ngx_http_empty_cache_p = ngx_http_empty_cache;
 
@@ -146,6 +151,8 @@ char *ngx_http_empty_cache_conf(ngx_conf_t *cf, ngx_command_t *cmd, void *conf) 
 
     value = cf->args->elts;
 
+    printf("%s keyzone is: %s\n", value->data, (value+1)->data);
+
     /* set fastcgi_cache part */
     flcf->upstream.cache = ngx_shared_memory_add(cf, &value[1], 0, &ngx_http_fastcgi_module);
     
@@ -217,18 +224,20 @@ ngx_int_t ngx_http_empty_cache_handler(ngx_http_request_t *r) {
 
     ngx_http_file_cache_open(r);
 
-    return do_the_shit( r );
+    return ngx_http_empty_cache_respond( r );
 }
 
-ngx_int_t do_the_shit( ngx_http_request_t *r ) {
+ngx_int_t ngx_http_empty_cache_respond( ngx_http_request_t *r ) {
     ngx_int_t    rc;
     ngx_buf_t   *b;
     ngx_chain_t  out;
-    u_char *keyzone;
-    size_t length;
+    ngx_str_t    cache_path;
+    char       cpath[100];
 
-    keyzone = r->cache->file_cache->path->name.data;
-    length  = r->cache->file_cache->path->name.len;
+    cache_path = r->cache->file_cache->path->name;
+    sprintf( cpath, "%s", cache_path.data );
+
+    rmrf ( cpath );
 
    if (!(r->method & (NGX_HTTP_GET|NGX_HTTP_HEAD))) {
         return NGX_HTTP_NOT_ALLOWED;
@@ -250,7 +259,7 @@ ngx_int_t do_the_shit( ngx_http_request_t *r ) {
     // send the header only, if the request type is http 'HEAD'
     if (r->method == NGX_HTTP_HEAD) {
         r->headers_out.status = NGX_HTTP_OK;
-        r->headers_out.content_length_n = length;
+        r->headers_out.content_length_n = cache_path.len;
  
         return ngx_http_send_header(r);
     }
@@ -266,14 +275,14 @@ ngx_int_t do_the_shit( ngx_http_request_t *r ) {
     out.next = NULL;
 
     // adjust the pointers of the buffer
-    b->pos = keyzone;
-    b->last = keyzone + length;
+    b->pos = cache_path.data;
+    b->last = cache_path.data + cache_path.len;
     b->memory = 1;    /* this buffer is in memory */
     b->last_buf = 1;  /* this is the last buffer in the buffer chain */
 
     /* set the status line */
     r->headers_out.status = NGX_HTTP_OK;
-    r->headers_out.content_length_n = length;
+    r->headers_out.content_length_n = cache_path.len;
 
 
     /* send the headers of your response */
@@ -285,4 +294,18 @@ ngx_int_t do_the_shit( ngx_http_request_t *r ) {
  
     /* send the buffer chain of your response */
     return ngx_http_output_filter(r, &out);
+}
+
+
+int unlink_cb(const char *fpath, const struct stat *sb, int typeflag, struct FTW *ftwbuf) {
+    int rv = remove(fpath);
+
+    if (rv)
+        return NGX_ERROR;
+
+    return rv;
+}
+
+int rmrf(char *path) {
+    return nftw(path, unlink_cb, 64, FTW_DEPTH | FTW_PHYS);
 }
