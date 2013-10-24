@@ -1,7 +1,7 @@
 /**
  * Nginx clean all cache module
  * @author Oscar MARGINEAN
- * @version 0.1
+ * @version 0.2
  */
 
 #include <nginx.h>
@@ -21,7 +21,7 @@ ngx_int_t ngx_http_empty_cache_remove_folder( char *path );
 
 /**
  * The top of the page which is displayed on a successful purge
- * @var
+ * @var static char
  */
 static char ngx_http_cache_purge_success_page_top[] =
     "<html>" CRLF
@@ -30,13 +30,20 @@ static char ngx_http_cache_purge_success_page_top[] =
     "<center><h1>Cache emptied</h1>" CRLF
 ;
 
+static char ngx_http_cache_purge_failure_page_top[] =
+    "<html>" CRLF
+    "<head><title>Cache could not be emptied</title></head>" CRLF
+    "<body bgcolor=\"white\">" CRLF
+    "<center><h1>Cache could not be emptied</h1>" CRLF
+;
+
 /**
  * The top of the page which is displayed on a successful purge
  * @var static char
  */
-static char ngx_http_cache_purge_success_page_tail[] =
+static char ngx_http_cache_purge_page_tail[] =
     CRLF "</center>" CRLF
-    "<hr><center>" NGINX_VER "with ngx_empty_cache module</center>" CRLF
+    "<hr><center>" NGINX_VER " with ngx_empty_cache module</center>" CRLF
     "</body>" CRLF
     "</html>" CRLF
 ;
@@ -148,9 +155,6 @@ char *ngx_http_empty_cache_conf(ngx_conf_t *cf, ngx_command_t *cmd, void *conf) 
     // nginx fastcgi local configuration
     ngx_http_fastcgi_loc_conf_t      *flcf;
 
-    // variable used for the cache key
-    ngx_http_compile_complex_value_t ccv;
-
     // getting values from the config
     ngx_str_t *value;
 
@@ -174,21 +178,6 @@ char *ngx_http_empty_cache_conf(ngx_conf_t *cf, ngx_command_t *cmd, void *conf) 
     flcf->upstream.cache = ngx_shared_memory_add(cf, &value[1], 0, &ngx_http_fastcgi_module);
     
     if (flcf->upstream.cache == NULL) {
-        return NGX_CONF_ERROR;
-    }
-
-    // set fastcgi_cache_key part
-    ngx_memzero(&ccv, sizeof(ngx_http_compile_complex_value_t));
-
-    ccv.cf = cf;
-
-    /**
-     * @todo find a better solution for this workaround
-     */
-    ccv.value = &value[1];
-    ccv.complex_value = &flcf->cache_key;
-
-    if (ngx_http_compile_complex_value(&ccv) != NGX_OK) {
         return NGX_CONF_ERROR;
     }
 
@@ -247,8 +236,6 @@ ngx_int_t ngx_http_empty_cache_handler(ngx_http_request_t *r) {
     c->file_cache = flcf->upstream.cache->data;
     c->file.log = r->connection->log;
 
-    ngx_http_file_cache_create_key(r);
-
     ngx_http_file_cache_open(r);
 
     return ngx_http_empty_cache_respond( r );
@@ -282,28 +269,42 @@ ngx_int_t ngx_http_empty_cache_respond( ngx_http_request_t *r ) {
     // clear the cache
     rc = ngx_http_empty_cache_remove_folder ( cpath );
 
-    if( rc != NGX_OK ) {
-        // display an error if the cache couldn't be cleaned
-        return rc;
+    switch ( rc ) {
+        case NGX_HTTP_OK:
+
+            // the length of the displayed markup
+            len = sizeof(ngx_http_cache_purge_success_page_top) - 1
+                  + sizeof(ngx_http_cache_purge_page_tail) - 1
+                  + sizeof(CRLF "<br>Path: ") - 1
+                  + cache_path.len;
+            break;
+        case NGX_HTTP_INTERNAL_SERVER_ERROR:
+
+            // the length of the displayed markup
+            len = sizeof(ngx_http_cache_purge_failure_page_top) - 1
+                  + sizeof(ngx_http_cache_purge_page_tail) - 1
+                  + sizeof(CRLF "<br>Path: ") - 1
+                  + cache_path.len
+                  + sizeof(CRLF "<br>Error: ") - 1
+                  + strlen( strerror( errno ) );
+            break;
+        case NGX_HTTP_NOT_FOUND:
+            return rc;
+            break;
+        default:
+            return NGX_HTTP_INTERNAL_SERVER_ERROR;
     }
 
-    // the length of the displayed markup
-    len = sizeof(ngx_http_cache_purge_success_page_top) - 1
-          + sizeof(ngx_http_cache_purge_success_page_tail) - 1
-          + sizeof(CRLF "<br>Path: ") - 1
-          + cache_path.len;
-
-    // set the 'Content-type' header
+    // set the headers
     r->headers_out.content_type.len  = sizeof("text/html") - 1;
     r->headers_out.content_type.data = (u_char *) "text/html";
-    r->headers_out.status            = NGX_HTTP_OK;
+    r->headers_out.status            = rc;
     r->headers_out.content_length_n  = len;
 
     // send the header only, if the request type is http 'HEAD'
     if (r->method == NGX_HTTP_HEAD) {
         return ngx_http_send_header(r);        
     }
-
 
     // create a temporary buffer for the output body
     b = ngx_create_temp_buf(r->pool, len);
@@ -317,14 +318,26 @@ ngx_int_t ngx_http_empty_cache_respond( ngx_http_request_t *r ) {
     out.next = NULL;
 
     // add the content to the buffer
-    b->last = ngx_cpymem(b->last, ngx_http_cache_purge_success_page_top,
-                         sizeof(ngx_http_cache_purge_success_page_top) - 1);
+    
+    if( rc == NGX_HTTP_OK) {
+        b->last = ngx_cpymem(b->last, ngx_http_cache_purge_success_page_top,
+                             sizeof(ngx_http_cache_purge_success_page_top) - 1);
+    } else {
+        b->last = ngx_cpymem(b->last, ngx_http_cache_purge_failure_page_top,
+                             sizeof(ngx_http_cache_purge_failure_page_top) - 1);
+        b->last = ngx_cpymem(b->last, CRLF "<br>Error: ",
+                             sizeof(CRLF "<br>Error: ") - 1);
+        b->last = ngx_cpymem(b->last, strerror( errno ),
+                             strlen( strerror( errno ) ));
+    }
+
     b->last = ngx_cpymem(b->last, CRLF "<br>Path: ",
                          sizeof(CRLF "<br>Path: ") - 1);
     b->last = ngx_cpymem(b->last, cache_path.data,
                          cache_path.len);
-    b->last = ngx_cpymem(b->last, ngx_http_cache_purge_success_page_tail,
-                         sizeof(ngx_http_cache_purge_success_page_tail) - 1);
+
+    b->last = ngx_cpymem(b->last, ngx_http_cache_purge_page_tail,
+                         sizeof(ngx_http_cache_purge_page_tail) - 1);
     b->last_buf = 1;
 
     /* send the headers of your response */
@@ -350,6 +363,8 @@ ngx_int_t ngx_http_empty_cache_remove_folder( char* path ) {
     struct stat buf;
     int    rv, empty = 1;
 
+    // reset errno
+    errno = 0;
 
     dp = opendir ( path );
 
@@ -400,5 +415,5 @@ ngx_int_t ngx_http_empty_cache_remove_folder( char* path ) {
         return NGX_HTTP_NOT_FOUND;
     }
 
-    return NGX_OK;
+    return NGX_HTTP_OK;
 }
