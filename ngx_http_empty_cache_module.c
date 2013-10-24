@@ -18,6 +18,11 @@ char     *ngx_http_empty_cache_conf( ngx_conf_t *cf, ngx_command_t *cmd, void *c
 ngx_int_t ngx_http_empty_cache_handler( ngx_http_request_t *r);
 ngx_int_t ngx_http_empty_cache_remove_folder( char *path );
 
+
+/**
+ * The top of the page which is displayed on a successful purge
+ * @var
+ */
 static char ngx_http_cache_purge_success_page_top[] =
     "<html>" CRLF
     "<head><title>Cache emptied</title></head>" CRLF
@@ -25,6 +30,10 @@ static char ngx_http_cache_purge_success_page_top[] =
     "<center><h1>Cache emptied</h1>" CRLF
 ;
 
+/**
+ * The top of the page which is displayed on a successful purge
+ * @var static char
+ */
 static char ngx_http_cache_purge_success_page_tail[] =
     CRLF "</center>" CRLF
     "<hr><center>" NGINX_VER "with ngx_empty_cache module</center>" CRLF
@@ -32,7 +41,11 @@ static char ngx_http_cache_purge_success_page_tail[] =
     "</html>" CRLF
 ;
 
+/**
+ * load the ngx_http_fastcgi_module
+ */
 extern ngx_module_t ngx_http_fastcgi_module;
+
 /**
  * Redefinition of ngx_http_fastcgi_loc_conf_t
  * @see ngx_http_fastcgi_module
@@ -68,11 +81,19 @@ typedef struct {
     #  endif /* NGX_PCRE */
 } ngx_http_fastcgi_loc_conf_t;
 
+/**
+ * The module directives
+ * the directive empty_cache can be called in a server and location config and takes
+ * exactly one argument
+ */
 static ngx_command_t  ngx_http_empty_cache_commands[] = {
-
+    /* empty cache directive */
     { ngx_string("empty_cache"),
+      /* directive configurations */
       NGX_HTTP_SRV_CONF | NGX_HTTP_LOC_CONF | NGX_CONF_TAKE1,
+      /* function to be called on config */
       ngx_http_empty_cache_conf,
+      /* the memory offset */
       NGX_HTTP_LOC_CONF_OFFSET,
       0,
       NULL },
@@ -80,6 +101,9 @@ static ngx_command_t  ngx_http_empty_cache_commands[] = {
       ngx_null_command
 };
 
+/**
+ * the module context.
+ */
 static ngx_http_module_t  ngx_http_empty_cache_module_ctx = {
     NULL,                                  /* preconfiguration */
     NULL,                                  /* postconfiguration */
@@ -90,14 +114,18 @@ static ngx_http_module_t  ngx_http_empty_cache_module_ctx = {
     NULL,                                  /* create server configuration */
     NULL,                                  /* merge server configuration */
 
-    NULL,         /* create location configuration */
+    NULL,                                  /* create location configuration */
     NULL                                   /* merge location configuration */
 };
 
+
+/**
+ * the actual module config
+ */
 ngx_module_t  ngx_http_empty_cache_module = {
     NGX_MODULE_V1,
     &ngx_http_empty_cache_module_ctx,      /* module context */
-    ngx_http_empty_cache_commands,              /* module directives */
+    ngx_http_empty_cache_commands,         /* module directives */
     NGX_HTTP_MODULE,                       /* module type */
     NULL,                                  /* init master */
     NULL,                                  /* init module */
@@ -109,8 +137,11 @@ ngx_module_t  ngx_http_empty_cache_module = {
     NGX_MODULE_V1_PADDING
 };
 
+/**
+ * This function is called when the module is set up
+ * @return      success or failure
+ */
 char *ngx_http_empty_cache_conf(ngx_conf_t *cf, ngx_command_t *cmd, void *conf) {
-    puts("ngx_http_empty_cache");
     // nginx core local configuration
     ngx_http_core_loc_conf_t         *clcf;
 
@@ -139,19 +170,21 @@ char *ngx_http_empty_cache_conf(ngx_conf_t *cf, ngx_command_t *cmd, void *conf) 
 
     value = cf->args->elts;
 
-    /* set fastcgi_cache part */
+    // set fastcgi_cache part
     flcf->upstream.cache = ngx_shared_memory_add(cf, &value[1], 0, &ngx_http_fastcgi_module);
     
     if (flcf->upstream.cache == NULL) {
         return NGX_CONF_ERROR;
     }
 
-    /* set fastcgi_cache_key part */
+    // set fastcgi_cache_key part
     ngx_memzero(&ccv, sizeof(ngx_http_compile_complex_value_t));
 
     ccv.cf = cf;
 
-
+    /**
+     * @todo find a better solution for this workaround
+     */
     ccv.value = &value[1];
     ccv.complex_value = &flcf->cache_key;
 
@@ -161,32 +194,38 @@ char *ngx_http_empty_cache_conf(ngx_conf_t *cf, ngx_command_t *cmd, void *conf) 
 
     // set handler
     clcf = ngx_http_conf_get_module_loc_conf(cf, ngx_http_core_module);
-
     clcf->handler = ngx_http_empty_cache_handler;
 
     return NGX_CONF_OK;
 }
 
+/**
+ * This function is called when the empty_cache directive is run ( usually in the purge location )
+ * @param  r the request
+ * @return   NGX_ERROR or HTML status
+ */
 ngx_int_t ngx_http_empty_cache_handler(ngx_http_request_t *r) {
 
     ngx_http_fastcgi_loc_conf_t  *flcf;
-
-    flcf = ngx_http_get_module_loc_conf(r, ngx_http_fastcgi_module);
-
     ngx_http_cache_t  *c;
     ngx_str_t         *key;
     ngx_int_t          rc;
 
+    flcf = ngx_http_get_module_loc_conf(r, ngx_http_fastcgi_module);
+
+    // discard the request body
     rc = ngx_http_discard_request_body(r);
     if (rc != NGX_OK) {
         return NGX_ERROR;
     }
 
+    // allocate memory for the cache
     c = ngx_pcalloc(r->pool, sizeof(ngx_http_cache_t));
     if (c == NULL) {
         return NGX_ERROR;
     }
 
+    // initialize the cache key array
     rc = ngx_array_init(&c->keys, r->pool, 1, sizeof(ngx_str_t));
     if (rc != NGX_OK) {
         return NGX_ERROR;
@@ -197,6 +236,7 @@ ngx_int_t ngx_http_empty_cache_handler(ngx_http_request_t *r) {
         return NGX_ERROR;
     }
 
+    // create the complex value for the key
     rc = ngx_http_complex_value(r, &flcf->cache_key, key);
     if (rc != NGX_OK) {
         return NGX_ERROR;
@@ -214,24 +254,23 @@ ngx_int_t ngx_http_empty_cache_handler(ngx_http_request_t *r) {
     return ngx_http_empty_cache_respond( r );
 }
 
+
+/**
+ * Clears the cache and returns the result
+ * @param  r the request
+ * @return   HTTP status - 500, 404 or NGX status
+ */
 ngx_int_t ngx_http_empty_cache_respond( ngx_http_request_t *r ) {
     ngx_int_t    rc;
     ngx_buf_t   *b;
     ngx_chain_t  out;
     ngx_str_t    cache_path;
-    size_t        len;
+    size_t       len;
     char         *cpath;
 
     // only allow GET and HEAD requests
     if (!(r->method & (NGX_HTTP_GET|NGX_HTTP_HEAD))) {
         return NGX_HTTP_NOT_ALLOWED;
-    }
-
-    // discard the request body
-    rc = ngx_http_discard_request_body(r);
-
-    if (rc != NGX_OK) {
-        return rc;
     }
 
     cache_path = r->cache->file_cache->path->name;
@@ -244,9 +283,11 @@ ngx_int_t ngx_http_empty_cache_respond( ngx_http_request_t *r ) {
     rc = ngx_http_empty_cache_remove_folder ( cpath );
 
     if( rc != NGX_OK ) {
+        // display an error if the cache couldn't be cleaned
         return rc;
     }
 
+    // the length of the displayed markup
     len = sizeof(ngx_http_cache_purge_success_page_top) - 1
           + sizeof(ngx_http_cache_purge_success_page_tail) - 1
           + sizeof(CRLF "<br>Path: ") - 1
@@ -275,6 +316,7 @@ ngx_int_t ngx_http_empty_cache_respond( ngx_http_request_t *r ) {
     out.buf = b;
     out.next = NULL;
 
+    // add the content to the buffer
     b->last = ngx_cpymem(b->last, ngx_http_cache_purge_success_page_top,
                          sizeof(ngx_http_cache_purge_success_page_top) - 1);
     b->last = ngx_cpymem(b->last, CRLF "<br>Path: ",
@@ -296,6 +338,11 @@ ngx_int_t ngx_http_empty_cache_respond( ngx_http_request_t *r ) {
     return ngx_http_output_filter(r, &out);
 }
 
+/**
+ * Function to recursively delete the cache folder
+ * @param  path the path of the cache folder
+ * @return      HTTP status code on failure, NGX_OK on success
+ */
 ngx_int_t ngx_http_empty_cache_remove_folder( char* path ) {
     DIR   *dp;
     struct dirent *ep;
@@ -320,15 +367,23 @@ ngx_int_t ngx_http_empty_cache_remove_folder( char* path ) {
 
                 strcat( filepath, ep->d_name );
 
+                // check if the target is a folder or a file
                 if( stat( filepath, &buf) == 0 && S_ISDIR( buf.st_mode ) ) {
+
+                    // if it's a folder, attempt to delete it's content
                     rv = ngx_http_empty_cache_remove_folder( filepath );
+
                     if (  rv == NGX_HTTP_INTERNAL_SERVER_ERROR) {
                         return NGX_HTTP_INTERNAL_SERVER_ERROR;
                     }
+
+                    // after emptying the folder, delete it
                     rv = rmdir( filepath );
+
                     if( rv )
                         return NGX_HTTP_INTERNAL_SERVER_ERROR;
                 } else {
+                    // if it's a file, delete it
                     rv = unlink( filepath );
     
                     if( rv )
@@ -336,7 +391,6 @@ ngx_int_t ngx_http_empty_cache_remove_folder( char* path ) {
                 }
             }
         }
-
 
         // if the folder was empty, return 404
         if( empty )
