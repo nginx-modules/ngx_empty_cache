@@ -148,9 +148,6 @@ char *ngx_http_empty_cache_conf(ngx_conf_t *cf, ngx_command_t *cmd, void *conf) 
     // nginx fastcgi local configuration
     ngx_http_fastcgi_loc_conf_t      *flcf;
 
-    // variable used for the cache key
-    ngx_http_compile_complex_value_t ccv;
-
     // getting values from the config
     ngx_str_t *value;
 
@@ -174,21 +171,6 @@ char *ngx_http_empty_cache_conf(ngx_conf_t *cf, ngx_command_t *cmd, void *conf) 
     flcf->upstream.cache = ngx_shared_memory_add(cf, &value[1], 0, &ngx_http_fastcgi_module);
     
     if (flcf->upstream.cache == NULL) {
-        return NGX_CONF_ERROR;
-    }
-
-    // set fastcgi_cache_key part
-    ngx_memzero(&ccv, sizeof(ngx_http_compile_complex_value_t));
-
-    ccv.cf = cf;
-
-    /**
-     * @todo find a better solution for this workaround
-     */
-    ccv.value = &value[1];
-    ccv.complex_value = &flcf->cache_key;
-
-    if (ngx_http_compile_complex_value(&ccv) != NGX_OK) {
         return NGX_CONF_ERROR;
     }
 
@@ -246,8 +228,6 @@ ngx_int_t ngx_http_empty_cache_handler(ngx_http_request_t *r) {
     c->body_start = ngx_pagesize;
     c->file_cache = flcf->upstream.cache->data;
     c->file.log = r->connection->log;
-
-    ngx_http_file_cache_create_key(r);
 
     ngx_http_file_cache_open(r);
 
