@@ -1,7 +1,7 @@
 /**
  * Nginx clean all cache module
  * @author Oscar MARGINEAN
- * @version 0.1
+ * @version 0.2
  */
 
 #include <nginx.h>
@@ -21,7 +21,7 @@ ngx_int_t ngx_http_empty_cache_remove_folder( char *path );
 
 /**
  * The top of the page which is displayed on a successful purge
- * @var
+ * @var static char
  */
 static char ngx_http_cache_purge_success_page_top[] =
     "<html>" CRLF
