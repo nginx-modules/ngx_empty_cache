@@ -71,7 +71,7 @@ typedef struct {
 static ngx_command_t  ngx_http_empty_cache_commands[] = {
 
     { ngx_string("empty_cache"),
-      NGX_HTTP_SRV_CONF | NGX_HTTP_LOC_CONF | NGX_CONF_TAKE2,
+      NGX_HTTP_SRV_CONF | NGX_HTTP_LOC_CONF | NGX_CONF_TAKE1,
       ngx_http_empty_cache_conf,
       NGX_HTTP_LOC_CONF_OFFSET,
       0,
@@ -110,6 +110,7 @@ ngx_module_t  ngx_http_empty_cache_module = {
 };
 
 char *ngx_http_empty_cache_conf(ngx_conf_t *cf, ngx_command_t *cmd, void *conf) {
+    puts("ngx_http_empty_cache");
     // nginx core local configuration
     ngx_http_core_loc_conf_t         *clcf;
 
@@ -149,7 +150,7 @@ char *ngx_http_empty_cache_conf(ngx_conf_t *cf, ngx_command_t *cmd, void *conf) 
     ngx_memzero(&ccv, sizeof(ngx_http_compile_complex_value_t));
 
     ccv.cf = cf;
-    ccv.value = &value[2];
+    ccv.value = 0;
     ccv.complex_value = &flcf->cache_key;
 
     if (ngx_http_compile_complex_value(&ccv) != NGX_OK) {
