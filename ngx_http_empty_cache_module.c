@@ -150,7 +150,9 @@ char *ngx_http_empty_cache_conf(ngx_conf_t *cf, ngx_command_t *cmd, void *conf) 
     ngx_memzero(&ccv, sizeof(ngx_http_compile_complex_value_t));
 
     ccv.cf = cf;
-    ccv.value = 0;
+
+
+    ccv.value = &value[1];
     ccv.complex_value = &flcf->cache_key;
 
     if (ngx_http_compile_complex_value(&ccv) != NGX_OK) {
